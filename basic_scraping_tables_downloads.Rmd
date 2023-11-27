@@ -1,0 +1,126 @@
+---
+title: "A very brief scraping tutorial in R"
+output: html_notebook
+author: "Nora Delaney"
+---
+
+The purpose of this notebook is to provide a few code snippets and examples that might be helpful for basic scraping projects in R.
+
+# Setup 
+
+Make sure you have all the packages you need...
+
+```{r}
+library(dplyr)
+library(rvest) 
+library(stringr) # or your favorite library for cleaning up strings 
+library(httr) # useful for direct calls to URLs, but not needed for rvest
+```
+
+Choose your URL and get into things. I chose this directory from the NY State directory of adult educations somewhat arbitrarily. Mostly, I was looking for an example that didn't have any JavaScript or embedded elements. 
+
+Once you have the HTML from your desired webpage, start clicking around the webpage in your browser. Hover over some data you want to grab and right-click "inspect". This will show you where you want to start digging in terms of the HTML node structure.
+
+```{r}
+# get the URL of a website with a directory of NY adult education programs
+url <- "https://www.acces.nysed.gov/aepp/find-adult-education-program"
+
+# read in the html
+doc <- read_html(url) 
+```
+
+# Download the PDF directory linked on the page 
+
+```{r}
+# you can keep drilling into the html nested structure until you find the thing you want
+pdf_href <- doc %>% 
+  html_element('body') %>% 
+  html_element('main') %>% 
+  html_element("div") %>% # you could keep looking by div but there is only one "a" tag at this level of the nested structure
+  html_element("a") %>% # skip straight to the a tag 
+  html_attr("href") # pull out the href of the pdf we want to download
+
+
+# or you could take it easy on yourself by finding the XPath in the inspection pane 
+# using Copy -> Copy Full XPath
+doc %>% 
+  html_element(xpath="/html/body/main/div/div/div/div/div/div/p[1]/a") %>% 
+  html_attr('href')
+
+# lastly, you could find the link using a css selector like this 
+doc %>% 
+  html_element('.field__items') %>% # class = 'field__items'
+  html_element('a') %>% 
+  html_attr('href')
+
+# download the file to a local directory 
+utils::download.file(pdf_href, destfile = 'aep_contacts.pdf')
+```
+
+# Scrape the table
+
+But wait, we're having so much fun... let's get the table (same data) from the raw HTML.
+
+```{r}
+# select the html for the table only, finding the table by its xpath 
+directory_html <- doc %>% 
+  html_element(xpath = '/html/body/main/div/div/div/div/div/div/table') 
+
+# rvest will often forma the table beautifully itself 
+directory <- directory_html %>% html_table()
+
+directory %>% head()
+```
+
+## But maybe we really wanted some of those embedded hyperlinks
+
+If you really want to customize what you're pulling out of the HTML you can loop through elements and be a bit more picky. This is true for tables—but also for any kind of directory or rule-based data structure. For example, if you wanted to speed things up by only collecting data meeting particular conditions, you could add that logic in here.
+
+```{r}
+# get column names from 'th' (table header) tags 
+directory_cols <- directory_html %>% 
+  html_elements('th') %>% 
+  html_text() %>% 
+  tolower() %>% str_replace(' ', '_')
+
+# get a vector of all the tr tags, then we'll loop through them and get extra attributes
+all_tr <- directory_html %>% 
+  html_element('tbody') %>% # not technically necessary, but all the tr are in tbody 
+  html_elements("tr") 
+
+# initialize an empty dataframe
+df <- tibble(.rows = NULL) # create an empty dataframe
+
+# loop through each row in the data and 
+for (i in seq_along(all_tr)) {
+
+  all_td <- all_tr[i] %>% html_elements('td') # find all table data cells associated with table row
+  
+  stopifnot(length(all_td) == 5) # we are expecting 5 td per tr, but some td have extra info we want 
+  
+  # loop through the td elements
+  for (j in c(1:5)) {
+    df[i, directory_cols[j]] <- all_td[j] %>% html_text()
+  }
+  
+  # get the href for the program from the 2nd td tag
+  df[i, 'agency_url'] <- all_td[2] %>% html_element('a') %>% html_attr('href')
+
+}
+
+df %>% head()
+```
+
+# What is it useful for?
+
+Once you've aggregated some data (for example, institution names or a bunch of URLs), you can use those as the jumping off point to gather additional data. In this case, it wouldn't be that helpful, since all of our agency URLs lead to individual sites with their own formatting rules. However, if we had scraped a directory where each institution had a similarly-formatted profile page on www.acces.nysed.gov, we would be in good shape to continue scraping structured data by looping through each URL and creating new calls using `read_html()`.
+
+Just play around and have fun! 
+
+
+
+
+
+
+
+
